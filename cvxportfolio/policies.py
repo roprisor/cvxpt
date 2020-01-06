@@ -174,24 +174,24 @@ class PeriodicRebalance(BaseRebalance):
     """Track a target portfolio, rebalancing at given times.
     """
 
-    def __init__(self, target, period, **kwargs):
+    def __init__(self, target, trading_freq, **kwargs):
         """
         Args:
             target: target weights, n+1 vector
-            period: supported options are "day", "week", "month", "quarter",
+            trading_freq: supported options are "day", "week", "month", "quarter",
                 "year".
                 rebalance on the first day of each new period
         """
         self.target = target
-        self.period = period
+        self.trading_freq = trading_freq
         super(PeriodicRebalance, self).__init__()
 
     def is_start_period(self, t):
-        result = not getattr(t, self.period) == getattr(self.last_t,
-                                                        self.period) if \
-            hasattr(self,
-                    'last_t')\
-            else True
+        if hasattr(self, 'last_t'):
+            result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
+        else:
+            result = True
+
         self.last_t = t
         return result
 
@@ -226,8 +226,8 @@ class SinglePeriodOpt(BasePolicy):
     https://stanford.edu/~boyd/papers/cvx_portfolio.html
     """
 
-    def __init__(self, return_forecast, costs, constraints, solver=None,
-                 solver_opts=None):
+    def __init__(self, return_forecast, costs, constraints, trading_freq='day',
+                 solver=None, solver_opts=None):
 
         if not isinstance(return_forecast, BaseReturnsModel):
             null_checker(return_forecast)
@@ -243,8 +243,18 @@ class SinglePeriodOpt(BasePolicy):
             assert isinstance(constraint, BaseConstraint)
             self.constraints.append(constraint)
 
+        self.trading_freq = trading_freq
         self.solver = solver
         self.solver_opts = {} if solver_opts is None else solver_opts
+
+    def is_start_period(self, t):
+        if hasattr(self, 'last_t'):
+            result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
+        else:
+            result = True
+
+        self.last_t = t
+        return result
 
     def get_trades(self, portfolio, t=None):
         """
@@ -260,6 +270,11 @@ class SinglePeriodOpt(BasePolicy):
 
         if t is None:
             t = pd.datetime.today()
+
+        # Exit early if we're not trading in this period
+        if not self.is_start_period(t):
+            logging.info('Skipping ' + str(t) + ', no trading allowed by policy')
+            self._nulltrade(portfolio)
 
         value = sum(portfolio)
         w = portfolio / value
@@ -333,8 +348,8 @@ class SinglePeriodOpt(BasePolicy):
 
 class MultiPeriodOpt(SinglePeriodOpt):
 
-    def __init__(self, trading_times,
-                 terminal_weights, lookahead_periods=None, *args, **kwargs):
+    def __init__(self, trading_times, terminal_weights, lookahead_periods=None,
+                 trading_freq='day', *args, **kwargs):
         """
         trading_times: list, all times at which get_trades will be called
         lookahead_periods: int or None. if None uses all remaining periods
@@ -342,11 +357,17 @@ class MultiPeriodOpt(SinglePeriodOpt):
         # Number of periods to look ahead.
         self.lookahead_periods = lookahead_periods
         self.trading_times = trading_times
+        self.trading_freq = trading_freq
         # Should there be a constraint that the final portfolio is the bmark?
         self.terminal_weights = terminal_weights
         super(MultiPeriodOpt, self).__init__(*args, **kwargs)
 
     def get_trades(self, portfolio, t=pd.datetime.today()):
+
+        # Exit early if we're not trading in this period
+        if not self.is_start_period(t):
+            logging.info('Skipping ' + str(t) + ', no trading allowed by policy')
+            self._nulltrade(portfolio)
 
         value = sum(portfolio)
         assert (value > 0.)
