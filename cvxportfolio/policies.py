@@ -274,7 +274,7 @@ class SinglePeriodOpt(BasePolicy):
         # Exit early if we're not trading in this period
         if not self.is_start_period(t):
             logging.info('Skipping ' + str(t) + ', no trading allowed by policy')
-            self._nulltrade(portfolio)
+            return self._nulltrade(portfolio)
 
         value = sum(portfolio)
         w = portfolio / value
@@ -367,7 +367,7 @@ class MultiPeriodOpt(SinglePeriodOpt):
         # Exit early if we're not trading in this period
         if not self.is_start_period(t):
             logging.info('Skipping ' + str(t) + ', no trading allowed by policy')
-            self._nulltrade(portfolio)
+            return self._nulltrade(portfolio)
 
         value = sum(portfolio)
         assert (value > 0.)
