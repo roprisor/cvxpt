@@ -46,7 +46,7 @@ from .costs import BaseCost
 # Also could try jitting with numba.
 
 
-class MarketSimulator():
+class MarketSimulator:
     logger = None
 
     def __init__(self, market_returns, costs,
@@ -117,6 +117,7 @@ class MarketSimulator():
             simulator=self)
         h = initial_portfolio
 
+        # TODO: How can the start_time/end_time format be more flexible?
         simulation_times = self.market_returns.index[
             (self.market_returns.index >= start_time) &
             (self.market_returns.index <= end_time)]
