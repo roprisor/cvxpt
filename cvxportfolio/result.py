@@ -44,7 +44,7 @@ def getFiscalQuarter(dt):
     return "Q%i %s" % (quarter, year)
 
 
-class SimulationResult():
+class SimulationResult:
     """A container for the result of a simulation.
 
     Attributes:
@@ -55,7 +55,7 @@ class SimulationResult():
     """
 
     def __init__(self, initial_portfolio, policy, cash_key, simulator,
-                 simulation_times=None, PPY=252,
+                 simulation_times=None, ppy=252,
                  timedelta=pd.Timedelta("1 days")):
         """
         Initialize the result object.
@@ -65,9 +65,10 @@ class SimulationResult():
             policy:
             simulator:
             simulation_times:
-            PPY:
+            ppy: periods per year
+            timedelta:
         """
-        self.PPY = PPY
+        self.ppy = ppy
         self.timedelta = timedelta
         self.initial_val = sum(initial_portfolio)
         self.initial_portfolio = copy.copy(initial_portfolio)
@@ -87,17 +88,17 @@ class SimulationResult():
             'Final timestamp':
                 self.h.index[-1],
             'Portfolio return (%)':
-                self.returns.mean() * 100 * self.PPY,
+                self.returns.mean() * 100 * self.ppy,
             'Excess return (%)':
-                self.excess_returns.mean() * 100 * self.PPY,
+                self.excess_returns.mean() * 100 * self.ppy,
             'Excess risk (%)':
-                self.excess_returns.std() * 100 * np.sqrt(self.PPY),
+                self.excess_returns.std() * 100 * np.sqrt(self.ppy),
             'Sharpe ratio':
                 self.sharpe_ratio,
             'Max. drawdown':
                 self.max_drawdown,
             'Turnover (%)':
-                self.turnover.mean() * 100 * self.PPY,
+                self.turnover.mean() * 100 * self.ppy,
             'Average policy time (sec)':
                 self.policy_time.mean(),
             'Average simulator time (sec)':
@@ -169,12 +170,12 @@ class SimulationResult():
     @property
     def volatility(self):
         """The annualized, realized portfolio volatility."""
-        return np.sqrt(self.PPY) * np.std(self.returns)
+        return np.sqrt(self.ppy) * np.std(self.returns)
 
     @property
     def mean_return(self):
         """The annualized mean portfolio return."""
-        return self.PPY * np.mean(self.returns)
+        return self.ppy * np.mean(self.returns)
 
     @property
     def returns(self):
@@ -193,7 +194,7 @@ class SimulationResult():
     def annual_growth_rate(self):
         """The annualized growth rate PPY/T \sum_{t=1}^T log(v_{t+1}/v_t)
         """
-        return self.growth_rates.sum() * self.PPY / self.growth_rates.size
+        return self.growth_rates.sum() * self.ppy / self.growth_rates.size
 
     @property
     def annual_return(self):
@@ -205,7 +206,7 @@ class SimulationResult():
     def _growth_to_return(self, growth):
         """Convert growth to annualized percentage return.
         """
-        return 100 * (np.exp(self.PPY * growth) - 1)
+        return 100 * (np.exp(self.ppy * growth) - 1)
 
     def get_quarterly_returns(self, benchmark=None):
         """The annualized returns for each fiscal quarter.
@@ -228,8 +229,8 @@ class SimulationResult():
 
     @property
     def sharpe_ratio(self):
-        return np.sqrt(self.PPY) * np.mean(self.excess_returns) / \
-            np.std(self.excess_returns)
+        return np.sqrt(self.ppy) * np.mean(self.excess_returns) / \
+               np.std(self.excess_returns)
 
     @property
     def turnover(self):
