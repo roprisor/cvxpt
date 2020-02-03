@@ -169,7 +169,7 @@ class SimulationResult:
 
     @property
     def volatility(self):
-        """The annualized, realized portfolio volatility."""
+        """The annualized, realized portfolio volatility in percent"""
         return np.sqrt(self.ppy) * np.std(self.returns)
 
     @property
@@ -192,21 +192,21 @@ class SimulationResult:
 
     @property
     def annual_growth_rate(self):
-        """The annualized growth rate PPY/T \sum_{t=1}^T log(v_{t+1}/v_t)
+        """The annualized growth rate PPY/T \ sum_{t=1}^T log(v_{t+1}/v_t)
         """
         return self.growth_rates.sum() * self.ppy / self.growth_rates.size
 
     @property
     def annual_return(self):
-        """The annualized return in percent.
+        """The annualized return
         """
         ret = self.growth_rates
         return self._growth_to_return(ret.mean())
 
     def _growth_to_return(self, growth):
-        """Convert growth to annualized percentage return.
+        """Convert growth to annualized return.
         """
-        return 100 * (np.exp(self.ppy * growth) - 1)
+        return np.exp(self.ppy * growth) - 1
 
     def get_quarterly_returns(self, benchmark=None):
         """The annualized returns for each fiscal quarter.
