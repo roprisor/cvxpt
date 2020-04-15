@@ -77,14 +77,40 @@ class Hold(BasePolicy):
 
 
 class RankAndLongShort(BasePolicy):
-    """Rank assets, long the best and short the worst (cash neutral)."""
+    """Rank assets, long the best and short the worst (cash neutral).
 
-    def __init__(self, return_forecast, num_long, num_short, target_turnover):
-        self.target_turnover = target_turnover
+    """
+
+    def __init__(self, return_forecast, num_long, num_short, target_turnover=1, trading_freq="day"):
+        """
+
+        :param return_forecast:
+        :param num_long:
+        :param num_short:
+        :param target_turnover:
+        :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
+                    rebalance on the first day of each new period
+        """
+        self.return_forecast = return_forecast
         self.num_long = num_long
         self.num_short = num_short
-        self.return_forecast = return_forecast
+        self.target_turnover = target_turnover
+        self.trading_freq = trading_freq
         super(RankAndLongShort, self).__init__()
+
+    def is_start_period(self, t):
+        """
+        Validates if time == start of period -> should rebalance
+        :param t:
+        :return:
+        """
+        if hasattr(self, 'last_t'):
+            result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
+        else:
+            result = True
+
+        self.last_t = t
+        return result
 
     def get_trades(self, portfolio, t=pd.datetime.today()):
         # Create flattening trades
@@ -112,7 +138,7 @@ class RankAndLongShort(BasePolicy):
         # Total trades = flatten + enter
         u = u_flatten + u_enter
 
-        return u
+        return u if self.is_start_period(t) else self._nulltrade(portfolio)
 
 
 class ProportionalTrade(BasePolicy):
