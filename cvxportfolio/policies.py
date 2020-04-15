@@ -87,26 +87,30 @@ class RankAndLongShort(BasePolicy):
         super(RankAndLongShort, self).__init__()
 
     def get_trades(self, portfolio, t=pd.datetime.today()):
+        # Create flattening trades
+        u_flatten = portfolio * -1
+
+        # Retrieve the current time period's return predictions
         prediction = time_locator(self.return_forecast, t, as_numpy=False)
         sorted_ret = prediction.sort_values()
 
+        # Grab the indices for the longs and shorts
         short_trades = sorted_ret.index[:self.num_short]
         long_trades = sorted_ret.index[-self.num_long:]
 
-        u = pd.Series(0., index=prediction.index)
-        u[short_trades] = -1.
-        u[long_trades] = 1.
-        u /= sum(abs(u))
-        u = sum(portfolio) * u * self.target_turnover
+        # Create trades vector and assign equal weight for long and for shorts
+        u_enter = pd.Series(0., index=prediction.index)
+        if self.num_short > 0:
+            u_enter[short_trades] = -1. / self.num_short
+        if self.num_long:
+            u_enter[long_trades] = 1. / self.num_long
 
-        # import pdb; pdb.set_trace()
-        #
-        # # ex-post cash neutrality
-        # old_cash = portfolio[-1]
-        # if old_cash > 0:
-        #     u[short] = u[short] + old_cash/self.num_short
-        # else:
-        #     u[long] = u[long] + old_cash/self.num_long
+        # Normalize and allocate cash
+        u_enter /= sum(abs(u_enter))
+        u_enter = u_enter * sum(portfolio)
+
+        # Total trades = flatten + enter
+        u = u_flatten + u_enter
 
         return u
 

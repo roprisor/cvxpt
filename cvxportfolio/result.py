@@ -96,7 +96,7 @@ class SimulationResult:
             'Sharpe ratio':
                 self.sharpe_ratio,
             'Max. drawdown':
-                self.max_drawdown,
+                self.max_drawdown * 100,
             'Turnover (%)':
                 self.turnover.mean() * 100 * self.ppy,
             'Average policy time (sec)':
@@ -247,7 +247,7 @@ class SimulationResult:
 
     @property
     def max_drawdown(self):
-        """The maximum peak to trough drawdown in percent.
+        """The maximum peak to trough drawdown.
         """
         val_arr = self.v.values
         max_dd_so_far = 0
@@ -255,6 +255,6 @@ class SimulationResult:
         for val in val_arr[1:]:
             if val >= cur_max:
                 cur_max = val
-            elif 100 * (cur_max - val) / cur_max > max_dd_so_far:
-                max_dd_so_far = 100 * (cur_max - val) / cur_max
+            elif (cur_max - val) / cur_max > max_dd_so_far:
+                max_dd_so_far = (cur_max - val) / cur_max
         return max_dd_so_far
