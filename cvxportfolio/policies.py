@@ -88,7 +88,7 @@ class RankAndLongShort(BasePolicy):
 
     def get_trades(self, portfolio, t=pd.datetime.today()):
         # Create flattening trades
-        u_flatten = portfolio * -1
+        u_flatten = portfolio * -1 * self.target_turnover
 
         # Retrieve the current time period's return predictions
         prediction = time_locator(self.return_forecast, t, as_numpy=False)
@@ -107,7 +107,7 @@ class RankAndLongShort(BasePolicy):
 
         # Normalize and allocate cash
         u_enter /= sum(abs(u_enter))
-        u_enter = u_enter * sum(portfolio)
+        u_enter = u_enter * sum(portfolio) * self.target_turnover
 
         # Total trades = flatten + enter
         u = u_flatten + u_enter
