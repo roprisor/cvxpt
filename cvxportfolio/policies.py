@@ -42,8 +42,8 @@ from cvxportfolio.utils.data_management import time_locator, null_checker
 
 
 __all__ = ['Hold', 'FixedTrade', 'PeriodicRebalance', 'AdaptiveRebalance',
-           'SinglePeriodOpt', 'MultiPeriodOpt', 'ProportionalTrade',
-           'RankAndLongShort']
+           'SinglePeriodOpt', 'MultiPeriodOpt', 'BlackLittermanOpt',
+           'ProportionalTrade', 'RankAndLongShort']
 
 
 class BasePolicy(object):
