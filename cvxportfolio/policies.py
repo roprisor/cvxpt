@@ -28,11 +28,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from abc import ABCMeta, abstractmethod
 import pandas as pd
 import numpy as np
 import logging
 import cvxpy as cvx
+from abc import ABCMeta, abstractmethod
+from datetime import datetime
 
 from cvxportfolio.costs import BaseCost
 from cvxportfolio.returns import BaseReturnsModel
@@ -49,12 +50,17 @@ class BasePolicy(object):
     """ Base class for a trading policy. """
     __metaclass__ = ABCMeta
 
-    def __init__(self):
+    def __init__(self, trading_freq='day'):
+        """
+        :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
+                    rebalance on the first day of each new period
+        """
         self.costs = []
         self.constraints = []
+        self.trading_freq = trading_freq
 
     @abstractmethod
-    def get_trades(self, portfolio, t=pd.datetime.today()):
+    def get_trades(self, portfolio, t=datetime.today()):
         """Trades list given current portfolio and time t.
         """
         return NotImplemented
@@ -67,12 +73,26 @@ class BasePolicy(object):
         return np.round(self.get_trades(portfolio,
                                         t) / time_locator(prices, t))[:-1]
 
+    def is_start_period(self, t):
+        """
+        Validates if time == start of period -> should rebalance
+        :param t:
+        :return:
+        """
+        if hasattr(self, 'last_t'):
+            result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
+        else:
+            result = True
+
+        self.last_t = t
+        return result
+
 
 class Hold(BasePolicy):
     """Hold initial portfolio.
     """
 
-    def get_trades(self, portfolio, t=pd.datetime.today()):
+    def get_trades(self, portfolio, t=datetime.today()):
         return self._nulltrade(portfolio)
 
 
@@ -81,7 +101,7 @@ class RankAndLongShort(BasePolicy):
 
     """
 
-    def __init__(self, return_forecast, num_long, num_short, target_turnover=1, trading_freq="day"):
+    def __init__(self, return_forecast, num_long, num_short, target_turnover=1, trading_freq='day'):
         """
 
         :param return_forecast:
@@ -98,21 +118,7 @@ class RankAndLongShort(BasePolicy):
         self.trading_freq = trading_freq
         super(RankAndLongShort, self).__init__()
 
-    def is_start_period(self, t):
-        """
-        Validates if time == start of period -> should rebalance
-        :param t:
-        :return:
-        """
-        if hasattr(self, 'last_t'):
-            result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
-        else:
-            result = True
-
-        self.last_t = t
-        return result
-
-    def get_trades(self, portfolio, t=pd.datetime.today()):
+    def get_trades(self, portfolio, t=datetime.today()):
         # Create flattening trades
         u_flatten = portfolio * -1 * self.target_turnover
 
@@ -149,7 +155,7 @@ class ProportionalTrade(BasePolicy):
         self.time_steps = time_steps
         super(ProportionalTrade, self).__init__()
 
-    def get_trades(self, portfolio, t=pd.datetime.today()):
+    def get_trades(self, portfolio, t=datetime.today()):
         try:
             missing_time_steps = len(
                 self.time_steps) - next(i for (i, x)
@@ -165,7 +171,7 @@ class ProportionalTrade(BasePolicy):
 class SellAll(BasePolicy):
     """Sell all non-cash assets."""
 
-    def get_trades(self, portfolio, t=pd.datetime.today()):
+    def get_trades(self, portfolio, t=datetime.today()):
         trade = -pd.Series(portfolio, copy=True)
         trade.ix[-1] = 0.
         return trade
@@ -188,7 +194,7 @@ class FixedTrade(BasePolicy):
         assert(self.tradeweight is None or sum(self.tradeweight) == 0.)
         super(FixedTrade, self).__init__()
 
-    def get_trades(self, portfolio, t=pd.datetime.today()):
+    def get_trades(self, portfolio, t=datetime.today()):
         if self.tradevec is not None:
             return self.tradevec
         return sum(portfolio) * self.tradeweight
@@ -216,16 +222,7 @@ class PeriodicRebalance(BaseRebalance):
         self.trading_freq = trading_freq
         super(PeriodicRebalance, self).__init__()
 
-    def is_start_period(self, t):
-        if hasattr(self, 'last_t'):
-            result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
-        else:
-            result = True
-
-        self.last_t = t
-        return result
-
-    def get_trades(self, portfolio, t=pd.datetime.today()):
+    def get_trades(self, portfolio, t=datetime.today()):
         return self._rebalance(portfolio) if self.is_start_period(t) else \
             self._nulltrade(portfolio)
 
@@ -239,7 +236,7 @@ class AdaptiveRebalance(BaseRebalance):
         self.tracking_error = tracking_error
         super(AdaptiveRebalance, self).__init__()
 
-    def get_trades(self, portfolio, t=pd.datetime.today()):
+    def get_trades(self, portfolio, t=datetime.today()):
         weights = portfolio / sum(portfolio)
         diff = (weights - self.target).values
 
@@ -277,15 +274,6 @@ class SinglePeriodOpt(BasePolicy):
         self.solver = solver
         self.solver_opts = {} if solver_opts is None else solver_opts
 
-    def is_start_period(self, t):
-        if hasattr(self, 'last_t'):
-            result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
-        else:
-            result = True
-
-        self.last_t = t
-        return result
-
     def get_trades(self, portfolio, t=None):
         """
         Get optimal trade vector for given portfolio at time t.
@@ -299,7 +287,7 @@ class SinglePeriodOpt(BasePolicy):
         """
 
         if t is None:
-            t = pd.datetime.today()
+            t = datetime.today()
 
         # Exit early if we're not trading in this period
         if not self.is_start_period(t):
@@ -392,7 +380,7 @@ class MultiPeriodOpt(SinglePeriodOpt):
         self.terminal_weights = terminal_weights
         super(MultiPeriodOpt, self).__init__(*args, **kwargs)
 
-    def get_trades(self, portfolio, t=pd.datetime.today()):
+    def get_trades(self, portfolio, t=datetime.today()):
 
         # Exit early if we're not trading in this period
         if not self.is_start_period(t):
@@ -443,3 +431,33 @@ class MultiPeriodOpt(SinglePeriodOpt):
         sum(prob_arr).solve(solver=self.solver)
         return pd.Series(index=portfolio.index,
                          data=(z_vars[0].value * value))
+
+
+class BlackLittermanOpt(BasePolicy):
+    """
+    Implements the Black Litterman model for asset allocation
+    """
+    def __init__(self, r_posterior, sigma_posterior, delta, trading_freq='day'):
+        """
+        Initialize required variables for the optimization
+        :param r_posterior: returns with views incorporated
+        :param sigma_posterior: sigmas with views incorporated
+        :param delta: risk aversion coefficient
+        :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
+                    rebalance on the first day of each new period
+        """
+        self.r_posterior = r_posterior
+        self.sigma_posterior = sigma_posterior
+        self.delta = delta
+        self.trading_freq = trading_freq
+        super(BlackLittermanOpt, self).__init__(trading_freq)
+
+    def get_trades(self, portfolio, t=datetime.today()):
+        # Retrieve the current time period's return & sigma predictions
+        r_post = time_locator(self.r_posterior, t, as_numpy=False)
+        sigma_post = time_locator(self.sigma_posterior, t, as_numpy=False)
+
+        # BL optimization result
+        u = np.dot(np.linalg.inv(self.delta * sigma_post), r_post)
+
+        return u if self.is_start_period(t) else self._nulltrade(portfolio)
