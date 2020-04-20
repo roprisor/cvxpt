@@ -437,7 +437,8 @@ class BlackLittermanOpt(BasePolicy):
     """
     Implements the Black Litterman model for asset allocation
     """
-    def __init__(self, r_posterior, sigma_posterior, delta, trading_freq='day', **kwargs):
+    def __init__(self, r_posterior, sigma_posterior, delta,
+                 trading_freq='day', risk_free_symbol='USDOLLAR', **kwargs):
         """
         Initialize required variables for the optimization
         :param r_posterior: returns with views incorporated
@@ -445,11 +446,13 @@ class BlackLittermanOpt(BasePolicy):
         :param delta: risk aversion coefficient
         :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
                     rebalance on the first day of each new period
+        :param risk_free_symbol: risk free symbol (cash)
         """
         self.r_posterior = r_posterior
         self.sigma_posterior = sigma_posterior
         self.delta = delta
         self.trading_freq = trading_freq
+        self.risk_free_symbol = risk_free_symbol
         super(BlackLittermanOpt, self).__init__(trading_freq, **kwargs)
 
     def get_trades(self, portfolio, t=datetime.today()):
@@ -459,6 +462,9 @@ class BlackLittermanOpt(BasePolicy):
 
         # BL optimization result
         u = np.dot(np.linalg.inv(self.delta * sigma_post), r_post)
-        u = np.append(u, 0)  # BL is always fully invested hence 0 cash allocation
+        u = pd.Series(index=r_post.index, data=u)
 
-        return pd.Series(index=r_post.index, data=u) if self.is_start_period(t) else self._nulltrade(portfolio)
+        # Add risk free symbol: BL is always fully invested hence 0 cash allocation
+        u = pd.concat([u, pd.Series(index=[self.risk_free_symbol], data=[0])])
+
+        return u if self.is_start_period(t) else self._nulltrade(portfolio)
