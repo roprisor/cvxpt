@@ -459,5 +459,6 @@ class BlackLittermanOpt(BasePolicy):
 
         # BL optimization result
         u = np.dot(np.linalg.inv(self.delta * sigma_post), r_post)
+        u = np.append(u, 0)  # BL is always fully invested hence 0 cash allocation
 
-        return u if self.is_start_period(t) else self._nulltrade(portfolio)
+        return pd.Series(index=r_post.index, data=u) if self.is_start_period(t) else self._nulltrade(portfolio)
