@@ -461,7 +461,7 @@ class BlackLittermanOpt(BasePolicy):
         sigma_post = time_locator(self.sigma_posterior, t, as_numpy=False)
 
         # BL optimization result
-        u = np.dot(np.linalg.inv(self.delta * sigma_post), r_post)
+        u = sum(portfolio) * np.dot(np.linalg.inv(self.delta * sigma_post), r_post) - portfolio
         u = pd.Series(index=r_post.index, data=u)
 
         # Add risk free symbol: BL is always fully invested hence 0 cash allocation
