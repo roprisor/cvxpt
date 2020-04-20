@@ -461,10 +461,10 @@ class BlackLittermanOpt(BasePolicy):
         sigma_post = time_locator(self.sigma_posterior, t, as_numpy=False)
 
         # BL optimization result
-        u = sum(portfolio) * np.dot(np.linalg.inv(self.delta * sigma_post), r_post) - portfolio
+        u = sum(portfolio) * np.dot(np.linalg.inv(self.delta * sigma_post), r_post)
         u = pd.Series(index=r_post.index, data=u)
 
         # Add risk free symbol: BL is always fully invested hence 0 cash allocation
         u = pd.concat([u, pd.Series(index=[self.risk_free_symbol], data=[0])])
 
-        return u if self.is_start_period(t) else self._nulltrade(portfolio)
+        return u.subtract(portfolio) if self.is_start_period(t) else self._nulltrade(portfolio)
