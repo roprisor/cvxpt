@@ -438,21 +438,22 @@ class BlackLittermanOpt(BasePolicy):
     Implements the Black Litterman model for asset allocation
     """
     def __init__(self, r_posterior, sigma_posterior, delta,
-                 trading_freq='day', risk_free_symbol='USDOLLAR', **kwargs):
+                 trading_freq='day', target_turnover=1, **kwargs):
         """
         Initialize required variables for the optimization
         :param r_posterior: returns with views incorporated
         :param sigma_posterior: sigmas with views incorporated
         :param delta: risk aversion coefficient
+        :param target_turnover: target turnover
+                    1 is 100% turnover each time
         :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
                     rebalance on the first day of each new period
-        :param risk_free_symbol: risk free symbol (cash)
         """
         self.r_posterior = r_posterior
         self.sigma_posterior = sigma_posterior
         self.delta = delta
         self.trading_freq = trading_freq
-        self.risk_free_symbol = risk_free_symbol
+        self.target_turnover = target_turnover
         super(BlackLittermanOpt, self).__init__(trading_freq, **kwargs)
 
     def get_trades(self, portfolio, t=datetime.today()):
@@ -464,7 +465,9 @@ class BlackLittermanOpt(BasePolicy):
         u = sum(portfolio) * np.dot(np.linalg.inv(self.delta * sigma_post), r_post)
         u = pd.Series(index=r_post.index, data=u)
 
-        # Add risk free symbol: BL is always fully invested hence 0 cash allocation
-        u = pd.concat([u, pd.Series(index=[self.risk_free_symbol], data=[0])])
+        if sum(abs(u)) >= 3 * sum(abs(portfolio)):
+            print('Today: {d}'.format(d=str(t)))
+            print('BLOpt: portfolio: {s}'.format(s=str(portfolio)))
+            print('BLOpt: u: {s}'.format(s=str(u)))
 
-        return u.subtract(portfolio) if self.is_start_period(t) else self._nulltrade(portfolio)
+        return u.subtract(portfolio) * self.target_turnover if self.is_start_period(t) else self._nulltrade(portfolio)
