@@ -36,13 +36,13 @@ from abc import ABCMeta, abstractmethod
 from datetime import datetime
 
 from cvxportfolio.costs import BaseCost
-from cvxportfolio.returns import BaseReturnsModel
+from cvxportfolio.returns import BaseReturnsModel, ReturnsForecast
 from cvxportfolio.constraints import BaseConstraint
 from cvxportfolio.utils.data_management import time_locator, null_checker
 
 
 __all__ = ['Hold', 'FixedTrade', 'PeriodicRebalance', 'AdaptiveRebalance',
-           'SinglePeriodOpt', 'MultiPeriodOpt', 'BlackLittermanOpt',
+           'SinglePeriodOpt', 'MultiPeriodOpt', 'BlackLittermanSPOpt', 'MPCOpt',
            'ProportionalTrade', 'RankAndLongShort']
 
 
@@ -433,7 +433,7 @@ class MultiPeriodOpt(SinglePeriodOpt):
                          data=(z_vars[0].value * value))
 
 
-class BlackLittermanOpt(BasePolicy):
+class BlackLittermanSPOpt(BasePolicy):
     """
     Implements the Black Litterman model for asset allocation
     """
@@ -449,12 +449,14 @@ class BlackLittermanOpt(BasePolicy):
         :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
                     rebalance on the first day of each new period
         """
+        # Initialization
         self.r_posterior = r_posterior
         self.sigma_posterior = sigma_posterior
         self.delta = delta
         self.trading_freq = trading_freq
         self.target_turnover = target_turnover
-        super(BlackLittermanOpt, self).__init__(trading_freq, **kwargs)
+
+        super().__init__(trading_freq, **kwargs)
 
     def get_trades(self, portfolio, t=datetime.today()):
         # Retrieve the current time period's return & sigma predictions
@@ -471,3 +473,80 @@ class BlackLittermanOpt(BasePolicy):
             print('BLOpt: u: {s}'.format(s=str(u)))
 
         return u.subtract(portfolio) * self.target_turnover if self.is_start_period(t) else self._nulltrade(portfolio)
+
+
+class MPCOpt(SinglePeriodOpt):
+
+    def __init__(self, alphamodel, horizon=2, scenarios=2, trading_freq='day', **kwargs):
+        """
+
+        :param alphamodel: instance of alpha model class
+            can be any class that has generate_forward_scenario method()
+        :param horizon: periods ahead for prediction
+        :param scenarios: scenarios to optimize against
+        :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
+                    rebalance on the first day of each new period
+        :param kwargs:
+        """
+        # Initialization
+        self.model = alphamodel
+        self.horizon = horizon
+        self.scenarios = scenarios
+        self.trading_freq = trading_freq
+        if 'generate_forward_scenario' not in dir(self.model):
+            raise ValueError('MPCOpt: Model class requires a generate_forward_scenario() method. See: alphamodel')
+
+        # Should there be a constraint that the final portfolio is the bmark?
+        # self.terminal_weights = terminal_weights
+
+        super().__init__(trading_freq, **kwargs)
+
+    def get_trades(self, portfolio, t=datetime.today()):
+
+        # Exit early if we're not trading in this period
+        if not self.is_start_period(t):
+            logging.info('Skipping ' + str(t) + ', no trading allowed by policy')
+            return self._nulltrade(portfolio)
+
+        value = sum(portfolio)
+        assert (value > 0.)
+        w = cvx.Constant(portfolio.values / value)
+
+        # Initialization of optimization problem
+        prob_arr = []
+        z_vars = []
+
+        scenarios = []
+        for s in range(self.scenarios):
+            scenarios.append(self.model.generate_forward_scenario(t, self.horizon))
+
+        for tau in scenarios[0].returns.index:
+
+            z = cvx.Variable(w.size)
+            wplus = w + z
+            obj = cvx.Constant(0)
+            constr = []
+
+            for s in scenarios:
+                # Initialize returns
+                return_forecast = ReturnsForecast(s.returns)
+                obj += return_forecast.weight_expr(tau, wplus)
+
+                costs = []
+                for cost in self.costs:
+                    cost_expr, const_expr = cost.weight_expr(t, wplus, z, value)
+                    costs.append(cost_expr)
+                    constr += const_expr
+
+                    obj -= sum(costs)
+                    constr += [cvx.sum(z) == 0]
+                    constr += [con.weight_expr(t, wplus, z, value) for con in self.constraints]
+
+            prob = cvx.Problem(cvx.Maximize(obj), constr)
+            prob_arr.append(prob)
+            z_vars.append(z)
+            w = wplus
+
+        sum(prob_arr).solve(solver=self.solver)
+
+        return pd.Series(index=portfolio.returns.columns, data=(z_vars[0].value * value))
