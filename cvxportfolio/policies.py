@@ -40,6 +40,7 @@ from cvxportfolio.returns import BaseReturnsModel, ReturnsForecast
 from cvxportfolio.constraints import BaseConstraint
 from cvxportfolio.utils.data_management import time_locator, null_checker
 
+logging.basicConfig(format='%(asctime)s %(message)s')
 
 __all__ = ['Hold', 'FixedTrade', 'PeriodicRebalance', 'AdaptiveRebalance',
            'SinglePeriodOpt', 'MultiPeriodOpt', 'BlackLittermanSPOpt', 'MPCOpt',
@@ -50,7 +51,7 @@ class BasePolicy(object):
     """ Base class for a trading policy. """
     __metaclass__ = ABCMeta
 
-    def __init__(self, trading_freq='day', **kwargs):
+    def __init__(self, trading_freq='day'):
         """
         :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
                     rebalance on the first day of each new period
@@ -58,6 +59,7 @@ class BasePolicy(object):
         self.costs = []
         self.constraints = []
         self.trading_freq = trading_freq
+        logging.debug('BasePolicy: trading_freq {}'.format(trading_freq))
 
     @abstractmethod
     def get_trades(self, portfolio, t=datetime.today()):
@@ -83,6 +85,7 @@ class BasePolicy(object):
             result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
         else:
             result = True
+        logging.debug('BasePolicy: dt {0} is {1} a start period'.format(str(t), "" if result else " not "))
 
         self.last_t = t
         return result
@@ -253,26 +256,27 @@ class SinglePeriodOpt(BasePolicy):
     https://stanford.edu/~boyd/papers/cvx_portfolio.html
     """
 
-    def __init__(self, return_forecast, costs, constraints, trading_freq='day',
-                 solver=None, solver_opts=None, **kwargs):
+    def __init__(self, return_forecast, costs, constraints, solver=None, solver_opts=None, **kwargs):
 
         if not isinstance(return_forecast, BaseReturnsModel):
             null_checker(return_forecast)
         self.return_forecast = return_forecast
 
-        super(SinglePeriodOpt, self).__init__(trading_freq, **kwargs)
+        super(SinglePeriodOpt, self).__init__(**kwargs)
 
         for cost in costs:
             assert isinstance(cost, BaseCost)
             self.costs.append(cost)
+            logging.info('SPOpt: Adding cost: {}'.format(str(cost)))
 
         for constraint in constraints:
             assert isinstance(constraint, BaseConstraint)
             self.constraints.append(constraint)
+            logging.info('SPOpt: Adding constraint: {}'.format(str(constraint)))
 
-        self.trading_freq = trading_freq
         self.solver = solver
         self.solver_opts = {} if solver_opts is None else solver_opts
+        logging.debug('SPOpt: solver {0}, solver_opts {1}'.format(solver, str(solver_opts)))
 
     def get_trades(self, portfolio, t=None):
         """
@@ -475,9 +479,10 @@ class BlackLittermanSPOpt(BasePolicy):
         return u.subtract(portfolio) * self.target_turnover if self.is_start_period(t) else self._nulltrade(portfolio)
 
 
-class MPCOpt(SinglePeriodOpt):
+class MPCOpt(BasePolicy):
 
-    def __init__(self, alphamodel, horizon=2, scenarios=2, trading_freq='day', **kwargs):
+    def __init__(self, alphamodel, horizon, scenarios, scenario_mode,
+                 costs, constraints, solver=None, solver_opts=None, **kwargs):
         """
 
         :param alphamodel: instance of alpha model class
@@ -486,28 +491,53 @@ class MPCOpt(SinglePeriodOpt):
         :param scenarios: scenarios to optimize against
         :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
                     rebalance on the first day of each new period
+        :param scenario_mode: supported options are "eg", "lg", "er" and "hmm".
+                    See alphamodel.ss_hmm for more details.
+        :param costs:
+        :param constraints:
+        :param solver:
+        :param solver_opts:
         :param kwargs:
         """
         # Initialization
         self.model = alphamodel
         self.horizon = horizon
         self.scenarios = scenarios
-        self.trading_freq = trading_freq
+        self.scenario_mode = scenario_mode
+        logging.info('MPCOpt: model {0}, horizon {1}, scenarios {2}, scenario mode {3}'.
+                     format(str(alphamodel), horizon, scenarios, scenario_mode))
         if 'generate_forward_scenario' not in dir(self.model):
             raise ValueError('MPCOpt: Model class requires a generate_forward_scenario() method. See: alphamodel')
 
         # Should there be a constraint that the final portfolio is the bmark?
         # self.terminal_weights = terminal_weights
 
-        super().__init__(trading_freq, **kwargs)
+        # Initialize base policy and cost/constraint arrays
+        super().__init__(**kwargs)
+
+        for cost in costs:
+            assert isinstance(cost, BaseCost)
+            self.costs.append(cost)
+            logging.info('SPOpt: Adding cost: {}'.format(str(cost)))
+
+        for constraint in constraints:
+            assert isinstance(constraint, BaseConstraint)
+            self.constraints.append(constraint)
+            logging.info('SPOpt: Adding constraint: {}'.format(str(constraint)))
+
+        self.solver = solver
+        self.solver_opts = {} if solver_opts is None else solver_opts
+        logging.debug('SPOpt: solver {0}, solver_opts {1}'.format(solver, str(solver_opts)))
 
     def get_trades(self, portfolio, t=datetime.today()):
 
         # Exit early if we're not trading in this period
         if not self.is_start_period(t):
-            logging.info('Skipping ' + str(t) + ', no trading allowed by policy')
+            logging.debug('MPCOpt: Skipping {}, no trading allowed by policy'.format(str(t)))
             return self._nulltrade(portfolio)
+        logging.info('MPCOpt: Running for {}'.format(str(t)))
 
+        # Retrieve weights from portfolio allocation
         value = sum(portfolio)
         assert (value > 0.)
         w = cvx.Constant(portfolio.values / value)
@@ -516,37 +546,46 @@ class MPCOpt(SinglePeriodOpt):
         prob_arr = []
         z_vars = []
 
+        # Generate scenarios to optimize for
         scenarios = []
         for s in range(self.scenarios):
             scenarios.append(self.model.generate_forward_scenario(t, self.horizon))
 
+        # For each timeslot tau
         for tau in scenarios[0].returns.index:
 
+            # Initialize a new set of trades z & a new objective under new constraints
             z = cvx.Variable(w.size)
             wplus = w + z
             obj = cvx.Constant(0)
             constr = []
 
+            # Across all scenarios, optimize the same set of trades z
             for s in scenarios:
                 # Initialize returns
                 return_forecast = ReturnsForecast(s.returns)
                 obj += return_forecast.weight_expr(tau, wplus)
 
+                # Construct costs for scenario s
                 costs = []
                 for cost in self.costs:
                     cost_expr, const_expr = cost.weight_expr(t, wplus, z, value)
                     costs.append(cost_expr)
                     constr += const_expr
 
-                    obj -= sum(costs)
-                    constr += [cvx.sum(z) == 0]
-                    constr += [con.weight_expr(t, wplus, z, value) for con in self.constraints]
+                # Add costs & constraints
+                obj -= sum(costs)
+                constr += [cvx.sum(z) == 0]
+                constr += [con.weight_expr(t, wplus, z, value) for con in self.constraints]
 
+            # Add objective of optimizing timeslot tau to problem set
             prob = cvx.Problem(cvx.Maximize(obj), constr)
             prob_arr.append(prob)
             z_vars.append(z)
+
+            # Step to next timeslot tau
             w = wplus
 
         sum(prob_arr).solve(solver=self.solver)
 
-        return pd.Series(index=portfolio.returns.columns, data=(z_vars[0].value * value))
+        return pd.Series(index=portfolio.index, data=(z_vars[0].value * value))
