@@ -43,7 +43,7 @@ from cvxportfolio.utils.data_management import time_locator, null_checker
 logging.basicConfig(format='%(asctime)s %(message)s')
 
 __all__ = ['Hold', 'FixedTrade', 'PeriodicRebalance', 'AdaptiveRebalance',
-           'SinglePeriodOpt', 'MultiPeriodOpt', 'BlackLittermanSPOpt', 'MPCOpt',
+           'SinglePeriodOpt', 'MultiPeriodOpt', 'BlackLittermanSPOpt', 'MultiPeriodScenarioOpt',
            'ProportionalTrade', 'RankAndLongShort']
 
 
@@ -349,24 +349,6 @@ class SinglePeriodOpt(BasePolicy):
                 'The solver %s failed. Defaulting to no trades' % self.solver)
             return self._nulltrade(portfolio)
 
-# class LookaheadModel():
-#     """Returns the planning periods for multi-period.
-#     """
-#     def __init__(self, trading_times, period_lens):
-#         self.trading_times = trading_times
-#         self.period_lens = period_lens
-#
-#     def get_periods(self, t):
-#         """Returns planning periods.
-#         """
-#         periods = []
-#         tau = t
-#         for length in self.period_lens:
-#             incr = length*pd.Timedelta('1 days')
-#             periods.append((tau, tau + incr))
-#             tau += incr
-#         return periods
-
 
 class MultiPeriodOpt(SinglePeriodOpt):
 
@@ -479,7 +461,7 @@ class BlackLittermanSPOpt(BasePolicy):
         return u.subtract(portfolio) * self.target_turnover if self.is_start_period(t) else self._nulltrade(portfolio)
 
 
-class MPCOpt(BasePolicy):
+class MultiPeriodScenarioOpt(BasePolicy):
 
     def __init__(self, alphamodel, horizon, scenarios, scenario_mode,
                  costs, constraints, solver=None, solver_opts=None, **kwargs):
@@ -504,10 +486,11 @@ class MPCOpt(BasePolicy):
         self.horizon = horizon
         self.scenarios = scenarios
         self.scenario_mode = scenario_mode
-        logging.info('MPCOpt: model {0}, horizon {1}, scenarios {2}, scenario mode {3}'.
+        logging.info('MultiPeriodScenarioOpt: model {0}, horizon {1}, scenarios {2}, scenario mode {3}'.
                      format(str(alphamodel), horizon, scenarios, scenario_mode))
         if 'generate_forward_scenario' not in dir(self.model):
-            raise ValueError('MPCOpt: Model class requires a generate_forward_scenario() method. See: alphamodel')
+            raise ValueError('MultiPeriodScenarioOpt: Model class requires a generate_forward_scenario() method. '
+                             'See: alphamodel.ss_hmm')
 
         # Should there be a constraint that the final portfolio is the bmark?
         # self.terminal_weights = terminal_weights
@@ -518,24 +501,24 @@ class MPCOpt(BasePolicy):
         for cost in costs:
             assert isinstance(cost, BaseCost)
             self.costs.append(cost)
-            logging.info('SPOpt: Adding cost: {}'.format(str(cost)))
+            logging.info('MultiPeriodScenarioOpt: Adding cost: {}'.format(str(cost)))
 
         for constraint in constraints:
             assert isinstance(constraint, BaseConstraint)
             self.constraints.append(constraint)
-            logging.info('SPOpt: Adding constraint: {}'.format(str(constraint)))
+            logging.info('MultiPeriodScenarioOpt: Adding constraint: {}'.format(str(constraint)))
 
         self.solver = solver
         self.solver_opts = {} if solver_opts is None else solver_opts
-        logging.debug('SPOpt: solver {0}, solver_opts {1}'.format(solver, str(solver_opts)))
+        logging.debug('MultiPeriodScenarioOpt: solver {0}, solver_opts {1}'.format(solver, str(solver_opts)))
 
     def get_trades(self, portfolio, t=datetime.today()):
 
         # Exit early if we're not trading in this period
         if not self.is_start_period(t):
-            logging.debug('MPCOpt: Skipping {}, no trading allowed by policy'.format(str(t)))
+            logging.debug('MultiPeriodScenarioOpt: Skipping {}, no trading allowed by policy'.format(str(t)))
             return self._nulltrade(portfolio)
-        logging.info('MPCOpt: Running for {}'.format(str(t)))
+        logging.info('MultiPeriodScenarioOpt: Running for {}'.format(str(t)))
 
         # Retrieve weights from portfolio allocation
         value = sum(portfolio)
@@ -582,6 +565,136 @@ class MPCOpt(BasePolicy):
             prob = cvx.Problem(cvx.Maximize(obj), constr)
             prob_arr.append(prob)
             z_vars.append(z)
+
+            # Step to next timeslot tau
+            w = wplus
+
+        sum(prob_arr).solve(solver=self.solver)
+
+        return pd.Series(index=portfolio.index, data=(z_vars[0].value * value))
+
+
+class ModelPredictiveControlScenarioOpt(MultiPeriodScenarioOpt):
+
+    def __init__(self, alphamodel, horizon, scenarios, scenario_mode, return_target,
+                 costs, constraints, mpc_method='c', symmetric_penalty=True, solver=None, solver_opts=None, **kwargs):
+        """
+
+        :param alphamodel: instance of alpha model class
+            can be any class that has generate_forward_scenario method()
+        :param horizon: periods ahead for prediction
+        :param scenarios: scenarios to optimize against
+        :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
+                    rebalance on the first day of each new period
+        :param scenario_mode: supported options are "eg", "lg", "er" and "hmm".
+                    See alphamodel.ss_hmm for more details.
+        :param return_target: target return per period
+        :param costs:
+        :param constraints:
+        :param mpc_method: supported options are "c", "e", "er".
+                    c: constant target return
+                    e: exponentially converging to target return
+                    er: exponentially converging to target return + regain of past losses
+        :param symmetric_penalty: return target is penalized symmetrically or only for downside.
+        :param solver:
+        :param solver_opts:
+        :param kwargs:
+        """
+        # Initialization
+        self.model = alphamodel
+        self.horizon = horizon
+        self.scenarios = scenarios
+        self.scenario_mode = scenario_mode
+        self.return_target = return_target
+        self.mpc_method = mpc_method
+        self.symmetric_penalty = symmetric_penalty
+        logging.info('ModelPredictiveControlScenarioOpt: model {0}, horizon {1}, scenarios {2}, scenario mode {3}, '
+                     'return target {4}'.format(str(alphamodel), horizon, scenarios, scenario_mode, return_target))
+        if 'generate_forward_scenario' not in dir(self.model):
+            raise ValueError('ModelPredictiveControlScenarioOpt: Model class requires a generate_forward_scenario() '
+                             'method. See: alphamodel.ss_hmm')
+
+        # Should there be a constraint that the final portfolio is the bmark?
+        # self.terminal_weights = terminal_weights
+
+        # Initialize base policy and cost/constraint arrays
+        super().__init__(**kwargs)
+
+        for cost in costs:
+            assert isinstance(cost, BaseCost)
+            self.costs.append(cost)
+            logging.info('ModelPredictiveControlScenarioOpt: Adding cost: {}'.format(str(cost)))
+
+        for constraint in constraints:
+            assert isinstance(constraint, BaseConstraint)
+            self.constraints.append(constraint)
+            logging.info('ModelPredictiveControlScenarioOpt: Adding constraint: {}'.format(str(constraint)))
+
+        self.solver = solver
+        self.solver_opts = {} if solver_opts is None else solver_opts
+        logging.debug('ModelPredictiveControlScenarioOpt: solver {0}, solver_opts {1}'.format(solver, str(solver_opts)))
+
+    def get_trades(self, portfolio, t=datetime.today()):
+
+        # Exit early if we're not trading in this period
+        if not self.is_start_period(t):
+            logging.debug('ModelPredictiveControlScenarioOpt: Skipping {}, no trading allowed by policy'.format(str(t)))
+            return self._nulltrade(portfolio)
+        logging.info('ModelPredictiveControlScenarioOpt: Running for {}'.format(str(t)))
+
+        # Retrieve weights from portfolio allocation
+        value = sum(portfolio)
+        assert (value > 0.)
+        w = cvx.Constant(portfolio.values / value)
+
+        # Initialization of optimization problem
+        prob_arr = []
+        z_vars = []
+        t_vars = []  # used for introducing absolute value
+        target = cvx.Constant(self.return_target)
+
+        # Generate scenarios to optimize for
+        scenarios = []
+        for s in range(self.scenarios):
+            scenarios.append(self.model.generate_forward_scenario(t, self.horizon))
+
+        # For each timeslot tau
+        for tau in scenarios[0].returns.index:
+
+            # Initialize a new set of trades z & a new objective under new constraints
+            z = cvx.Variable(w.size)
+            t = cvx.Variable(2)
+            wplus = w + z
+            obj = cvx.Constant(0)
+            constr = []
+
+            # Across all scenarios, optimize the same set of trades z
+            for s in scenarios:
+                # Initialize returns & add to objective
+                return_forecast = ReturnsForecast(s.returns)
+                obj += -(t[0] - t[1])  # effectively max(-abs(target - return))
+
+                # Construct costs for scenarios
+                costs = []
+                for cost in self.costs:
+                    cost_expr, const_expr = cost.weight_expr(t, wplus, z, value)
+                    costs.append(cost_expr)
+                    constr += const_expr
+
+                # Add costs & scenario constraints
+                obj -= sum(costs)
+                constr += [cvx.sum(z) == 0]
+                constr += [con.weight_expr(t, wplus, z, value) for con in self.constraints]
+
+                # Add return vs target constraints
+                constr += [(target - return_forecast.weight_expr(tau, wplus)) == t[0] - t[1]]
+                constr += [t > 0]
+
+            # Add objective of optimizing timeslot tau to problem set
+            prob = cvx.Problem(cvx.Maximize(obj), constr)
+            prob_arr.append(prob)
+            z_vars.append(z)
+            t_vars.append(t)
 
             # Step to next timeslot tau
             w = wplus
