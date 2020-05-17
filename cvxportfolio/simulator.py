@@ -126,7 +126,7 @@ class MarketSimulator:
             logging.info('Getting trades at time %s' % t)
             start = time.time()
             try:
-                u = policy.get_trades(h, t)
+                u = policy.get_trades(h, t, results)
             except cvx.SolverError:
                 logging.warning(
                     'Solver failed on timestamp %s. Default to no trades.' % t)
