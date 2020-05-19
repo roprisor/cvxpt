@@ -454,10 +454,10 @@ class BlackLittermanSPOpt(BasePolicy):
         u = sum(portfolio) * np.dot(np.linalg.inv(self.delta * sigma_post), r_post)
         u = pd.Series(index=r_post.index, data=u)
 
-        if sum(abs(u)) >= 3 * sum(abs(portfolio)):
-            print('Today: {d}'.format(d=str(t)))
-            print('BLOpt: portfolio: {s}'.format(s=str(portfolio)))
-            print('BLOpt: u: {s}'.format(s=str(u)))
+        if sum(abs(u.subtract(portfolio))) >= 0.5 * sum(abs(portfolio)):
+            logging.debug('Today: {d}, we would have turned over >50% of the portfolio'.format(d=str(t)))
+            logging.debug('BLOpt: portfolio: {s}'.format(s=str(portfolio)))
+            logging.debug('BLOpt: u: {s}'.format(s=str(u)))
 
         return u.subtract(portfolio) * self.target_turnover if self.is_start_period(t) else self._nulltrade(portfolio)
 
