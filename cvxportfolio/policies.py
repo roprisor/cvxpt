@@ -474,8 +474,8 @@ class MultiPeriodScenarioOpt(BasePolicy):
         :param scenarios: scenarios to optimize against
         :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
                     rebalance on the first day of each new period
-        :param scenario_mode: supported options are "eg", "lg", "er" and "hmm".
-                    See alphamodel.ss_hmm for more details.
+        :param scenario_mode: supported options are "g", "c" and "hmm".
+                    See alphamodel.ss_hmm or alphamodel.ss_bl_hmm for more details.
         :param costs:
         :param constraints:
         :param solver:
@@ -511,7 +511,7 @@ class MultiPeriodScenarioOpt(BasePolicy):
 
         self.solver = solver
         self.solver_opts = {} if solver_opts is None else solver_opts
-        logging.debug('MultiPeriodScenarioOpt: solver {0}, solver_opts {1}'.format(solver, str(solver_opts)))
+        logging.debug('MultiPeriodScenarioOpt: solver {}, solver_opts {}'.format(solver, str(solver_opts)))
 
     def get_trades(self, portfolio, t=datetime.today(), **kwargs):
 
