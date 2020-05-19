@@ -513,7 +513,7 @@ class MultiPeriodScenarioOpt(BasePolicy):
         self.solver_opts = {} if solver_opts is None else solver_opts
         logging.debug('MultiPeriodScenarioOpt: solver {}, solver_opts {}'.format(solver, str(solver_opts)))
 
-    def get_trades(self, portfolio, t=datetime.today(), **kwargs):
+    def get_trades(self, portfolio, t=datetime.today(), *args, **kwargs):
 
         # Exit early if we're not trading in this period
         if not self.is_start_period(t):
@@ -602,7 +602,7 @@ class ModelPredictiveControlScenarioOpt(MultiPeriodScenarioOpt):
         # Initialize base policy and cost/constraint arrays
         super().__init__(**kwargs)
 
-    def get_trades(self, portfolio, t=datetime.today(), results=None):
+    def get_trades(self, portfolio, t=datetime.today(), results=None, *args, **kwargs):
 
         # Exit early if we're not trading in this period
         if not self.is_start_period(t):
