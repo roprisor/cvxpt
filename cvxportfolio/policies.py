@@ -82,10 +82,20 @@ class BasePolicy(object):
         :param t:
         :return:
         """
+        # If we haven't yet stored the last trade date, this is the first time we're running
+        #   Run once at the very start and only again when we're at a rebalance date
         if hasattr(self, 'last_t'):
-            result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
+            try:
+                result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
+            except AttributeError as e:
+                logging.debug('BasePolicy: trading_freq {t} is not supported, skipping.'.
+                              format(t=self.trading_freq))
         else:
             result = True
+
+            if not getattr(t, self.trading_freq):
+                logging.warning('BasePolicy: trading_freq {t} is not supported, the policy will only trade once.'.
+                                format(t=self.trading_freq))
         logging.debug('BasePolicy: dt {0} is {1} a start period'.format(str(t), "" if result else " not "))
 
         self.last_t = t
