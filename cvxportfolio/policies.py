@@ -90,10 +90,11 @@ class BasePolicy(object):
             except AttributeError as e:
                 logging.debug('BasePolicy: trading_freq {t} is not supported, skipping.'.
                               format(t=self.trading_freq))
+                result = False
         else:
             result = True
 
-            if not getattr(t, self.trading_freq):
+            if not hasattr(t, self.trading_freq):
                 logging.warning('BasePolicy: trading_freq {t} is not supported, the policy will only trade once.'.
                                 format(t=self.trading_freq))
         logging.debug('BasePolicy: dt {0} is {1} a start period'.format(str(t), "" if result else " not "))
