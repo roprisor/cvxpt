@@ -30,7 +30,6 @@ limitations under the License.
 
 import pandas as pd
 import numpy as np
-import math
 import logging
 import cvxpy as cvx
 from abc import ABCMeta, abstractmethod
@@ -88,14 +87,14 @@ class BasePolicy(object):
             try:
                 result = getattr(t, self.trading_freq) != getattr(self.last_t, self.trading_freq)
             except AttributeError as e:
-                logging.debug('BasePolicy: trading_freq {t} is not supported, skipping.'.
+                logging.debug('BasePolicy: trading_freq `{t}` is not supported, skipping.'.
                               format(t=self.trading_freq))
                 result = False
         else:
             result = True
 
             if not hasattr(t, self.trading_freq):
-                logging.warning('BasePolicy: trading_freq {t} is not supported, the policy will only trade once.'.
+                logging.warning('BasePolicy: trading_freq `{t}` is not supported, the policy will only trade once.'.
                                 format(t=self.trading_freq))
         logging.debug('BasePolicy: dt {0} is {1} a start period'.format(str(t), "" if result else " not "))
 
@@ -475,8 +474,8 @@ class BlackLittermanSPOpt(BasePolicy):
 
 class MultiPeriodScenarioOpt(BasePolicy):
 
-    def __init__(self, alphamodel, horizon, scenarios, scenario_mode,
-                 costs, constraints, solver=None, solver_opts=None, **kwargs):
+    def __init__(self, alphamodel, horizon, scenarios, costs, constraints,
+                 scenario_mode='c', scenario_ret_src='bl', solver=None, solver_opts=None, **kwargs):
         """
 
         :param alphamodel: instance of alpha model class
@@ -486,6 +485,8 @@ class MultiPeriodScenarioOpt(BasePolicy):
         :param trading_freq: supported options are "day", "week", "month", "quarter", "year".
                     rebalance on the first day of each new period
         :param scenario_mode: supported options are "g", "c" and "hmm".
+                    See alphamodel.ss_hmm or alphamodel.ss_bl_hmm for more details.
+        :param scenario_ret_src: support options are "bl" and "pred"
                     See alphamodel.ss_hmm or alphamodel.ss_bl_hmm for more details.
         :param costs:
         :param constraints:
@@ -498,8 +499,9 @@ class MultiPeriodScenarioOpt(BasePolicy):
         self.horizon = horizon
         self.scenarios = scenarios
         self.scenario_mode = scenario_mode
-        logging.info('MultiPeriodScenarioOpt: model {0}, horizon {1}, scenarios {2}, scenario mode {3}'.
-                     format(str(alphamodel), horizon, scenarios, scenario_mode))
+        self.scenario_ret_src = scenario_ret_src
+        logging.info('MultiPeriodScenarioOpt: model {0}, horizon {1}, scenarios {2}, scn mode {3}, scn ret_src {4}'.
+                     format(str(alphamodel), horizon, scenarios, scenario_mode, scenario_ret_src))
         if 'generate_forward_scenario' not in dir(self.model):
             raise ValueError('MultiPeriodScenarioOpt: Model class requires a generate_forward_scenario() method. '
                              'See: alphamodel.ss_hmm')
@@ -544,7 +546,9 @@ class MultiPeriodScenarioOpt(BasePolicy):
         # Generate scenarios to optimize for
         scenarios = []
         for s in range(self.scenarios):
-            scenarios.append(self.model.generate_forward_scenario(t, self.horizon))
+            scenarios.append(self.model.generate_forward_scenario(t, self.horizon,
+                                                                  mode=self.scenario_mode,
+                                                                  return_src=self.scenario_ret_src))
 
         # For each timeslot tau
         for tau in scenarios[0].returns.index:
@@ -581,34 +585,36 @@ class MultiPeriodScenarioOpt(BasePolicy):
             # Step to next timeslot tau
             w = wplus
 
-        sum(prob_arr).solve(solver=self.solver)
-
-        return pd.Series(index=portfolio.index, data=(z_vars[0].value * value))
+        problem = sum(prob_arr)
+        problem.solve(solver=self.solver)
+        if problem.status not in ["infeasible", "unbounded"]:
+            # Otherwise, problem.value is inf or -inf, respectively.
+            logging.info('MultiPeriodScenarioOpt: Optimization solved {}'.format(str(problem.solver_stats)))
+            logging.info("MultiPeriodScenarioOpt: Optimal value: %s" % problem.value)
+            logging.info('MultiPeriodScenarioOpt: z_vars[0] {}'.format(z_vars[0].value))
+            return pd.Series(index=portfolio.index, data=(z_vars[0].value * value))
+        else:
+            logging.warning('MultiPeriodScenarioOpt: Optimization failed, {}'.format(str(problem.status)))
+            logging.warning('MultiPeriodScenarioOpt: Problem: {}'.format(str(problem)))
+            return self._nulltrade(portfolio)
 
 
 class ModelPredictiveControlScenarioOpt(MultiPeriodScenarioOpt):
 
-    def __init__(self, return_target, mpc_method='c', symmetric_penalty=True, **kwargs):
+    def __init__(self, return_target, mpc_method='c', **kwargs):
         """
 
         :param return_target: target return per period
         :param mpc_method: supported options are "c", "e", "er".
                     c: constant target return
-                    e: exponentially converging to target return
-                    er: exponentially converging to target return + regain of past losses
-        :param symmetric_penalty: return target is penalized symmetrically or only for downside.
         :param kwargs:
         """
         # Initialization
         self.return_target = return_target
         self.mpc_method = mpc_method
-        self.symmetric_penalty = symmetric_penalty
         logging.info('ModelPredictiveControlScenarioOpt: return target {}'.format(return_target))
         if self.return_target < 0:
             raise ValueError('ModelPredictiveControlScenarioOpt: return target is required to be >= 0.')
-
-        # Should there be a constraint that the final portfolio is the bmark?
-        # self.terminal_weights = terminal_weights
 
         # Initialize base policy and cost/constraint arrays
         super().__init__(**kwargs)
@@ -624,47 +630,17 @@ class ModelPredictiveControlScenarioOpt(MultiPeriodScenarioOpt):
         # Generate scenarios to optimize for
         scenarios = []
         for s in range(self.scenarios):
-            scenarios.append(self.model.generate_forward_scenario(t, self.horizon))
+            scenarios.append(self.model.generate_forward_scenario(t, self.horizon,
+                                                                  mode=self.scenario_mode,
+                                                                  return_src=self.scenario_ret_src))
 
         # Compute the desired reference trajectory depending on the MPC method used
         reference_trajectory = pd.Series(index=scenarios[0].returns.index)
         # Constant target trajectory
         if self.mpc_method == 'c':
             reference_trajectory[:] = self.return_target
-        # Exponential target trajectory
-        elif 'e' in self.mpc_method:
-            # Compute current error from target
-            rolling_horizon_return = 0
-            try:
-                rolling_horizon_return = results.returns[-self.horizon:].mean()
-            except AttributeError as e:
-                logging.debug('ModelPredictiveControlScenarioOpt: Ran into an issue fetching results.returns. '
-                              'This should only happen on the very first simulation run. {}'.format(str(e)))
-
-            # Initialization
-            return_target = self.return_target
-            current_error = 0
-
-            # Only if not symmetric, don't set target if we're already outperforming it
-            if not self.symmetric_penalty and rolling_horizon_return > return_target:
-                return_target = rolling_horizon_return
-
-            # Exponentially converge to return_target
-            if self.mpc_method == 'e':
-                current_error = return_target - rolling_horizon_return
-            # Exponentially converge to a return_target which makes the average return across horizons be return_target
-            elif self.mpc_method == 'er':
-                sum_exp_horizon = (1 - math.exp(-1)) / (1 - math.exp(-self.horizon - 1))
-                return_target = (return_target * self.horizon - rolling_horizon_return * sum_exp_horizon) / (
-                            self.horizon - sum_exp_horizon)
-                current_error = return_target - rolling_horizon_return
-
-            # Define exponential references trajectory
-            error = np.cumprod([math.exp(-1)] * self.horizon) * current_error
-            reference_trajectory[:] = return_target - error
-
         else:
-            return NotImplemented('ModelPredictiveControlScenarioOpt: Unsupported mpc_method, please see func sig.')
+            return NotImplemented('ModelPredictiveControlScenarioOpt: Unsupported mpc_method, please see fn signature.')
 
         # Retrieve weights from portfolio allocation
         value = sum(portfolio)
@@ -674,6 +650,7 @@ class ModelPredictiveControlScenarioOpt(MultiPeriodScenarioOpt):
         # Initialization of optimization problem
         prob_arr = []
         z_vars = []
+        # return_obj = cvx.Constant(0)
 
         # For each timeslot tau
         for tau in scenarios[0].returns.index:
@@ -686,7 +663,7 @@ class ModelPredictiveControlScenarioOpt(MultiPeriodScenarioOpt):
 
             # Across all scenarios, optimize the same set of trades z
             for s in scenarios:
-                # Initialize returns & add to objective
+                # Initialize returns & add to return objective
                 obj -= cvx.square(reference_trajectory[tau] - time_locator(s.returns, tau, as_numpy=True) * wplus)
 
                 # Construct costs for scenarios
